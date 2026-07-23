@@ -6,6 +6,14 @@ danbooru:
   # Dedicated Danbooru bot account and its API key (keep the real key out of git)
   username: "bmb"
   api_key: "YOUR_DANBOORU_API_KEY"
+autotagger:
+  # fourier-spectrum autotagger service (image bytes in, Danbooru tags out).
+  url: "http://fourier-spectrum:5000"
+  # Confidence cutoffs for the general and character tag buckets.
+  general_threshold: 0.35
+  character_threshold: 0.75
+  # Per-image request timeout (ms); on timeout/error the post is created untagged.
+  timeout_ms: 20000
 bridge:
   port: 8009
   # Rooms where tagging is disabled (room IDs)

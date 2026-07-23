@@ -3,6 +3,7 @@ const yaml = require("js-yaml");
 const axios = require("axios");
 const { Cli, AppServiceRegistration, Bridge } = require("matrix-appservice-bridge");
 const { DanbooruClient } = require("./danbooru");
+const { autotag } = require("./autotagger");
 const invites = require("./invites");
 
 const config = yaml.load(fs.readFileSync(require("path").join(__dirname, "config.yaml"), "utf8"));
@@ -109,8 +110,20 @@ async function handleImageEvent(bridge, event) {
   const uploadMediaAssetId = uma && uma.id;
   if (!uploadMediaAssetId) throw new Error(`No upload media asset produced for upload ${upload.id}`);
 
+  // Autotag the in-flight bytes via fourier-spectrum (the DERIVED tag bucket).
+  // Fail-soft: a tagger outage posts the image untagged rather than wedging the
+  // bridge -- the reverse-sync path can still add tags later.
+  let derived = null;
+  try {
+    derived = await autotag(buffer, config);
+  } catch (err) {
+    console.warn(`[autotag] fourier-spectrum unavailable, posting untagged: ${err.message}`);
+  }
+  const rating = (derived && derived.rating) || config.bridge.default_rating;
+
   const post = await danbooru.createPost(uploadMediaAssetId, {
-    rating: config.bridge.default_rating,
+    rating,
+    tagString: derived ? derived.tags.join(" ") : "",
     source: mxcUrl,
   });
   const fullPost = await danbooru.getPost(post.id);
@@ -120,11 +133,11 @@ async function handleImageEvent(bridge, event) {
   await intent.sendStateEvent(roomId, TAG_STATE_TYPE, mxcUrl, {
     post_id: post.id,
     tags: tagString.split(/\s+/).filter(Boolean),
-    rating: config.bridge.default_rating,
+    rating,
     updated_by: "bmb",
     updated_at: Date.now(),
   });
-  console.log(`[done] post #${post.id} tagged: ${tagString}`);
+  console.log(`[done] post #${post.id} tagged (${derived ? derived.tags.length + " derived" : "autotag unavailable"}): ${tagString}`);
 }
 
 // Build the deps object handleInvite needs, backed by a bot Intent.
