@@ -164,6 +164,62 @@ function inviteDeps(bridge) {
   };
 }
 
+// Handle the !join on-ramp command. DM-only: a local (:<domain>) user messages
+// "!join" to the bot and is invited into the main space. Invite-and-accept, NOT
+// force-join -- the Synapse admin join endpoint acts as @__oidc_admin (not in
+// the room) and refuses, so invite-and-accept is the mechanism (D-80cec7 /
+// G-6f1488). Remote users are refused with a helpful message.
+async function handleJoinCommand(bridge, event) {
+  const body = event.content && event.content.body;
+  if (!body || body.trim() !== "!join") return false;
+  const sender = event.sender;
+  const roomId = event.room_id;
+  const intent = bridge.getIntent();
+  // DM only: exactly two joined members (bot + user).
+  if ((await joinedMemberCount(bridge, roomId)) !== 2) return false;
+  // Local-only gate: sender MXID must be on this homeserver. This is a
+  // deliberate policy choice (local users self-serve; remote users need a
+  // human invite), NOT a technical constraint -- @bmb can invite any MXID
+  // regardless of server. Revisit this gate if the server privacy model opens
+  // up (e.g. self-service on-ramp for all users).
+  const domain = config.homeserver.domain;
+  if (!sender.endsWith(":" + domain)) {
+    await intent.sendText(
+      roomId,
+      "The !join command is for " + domain + " members only. " +
+      "If you're on another server, message @saber:41chan.net to be invited to the space."
+    );
+    invites.audit({ kind: "onramp_refused_remote", sender });
+    return true;
+  }
+  const targetRoom = config.bridge.onramp_room;
+  // @bmb (PL 100, seated in the space) invites the user. The user accepts the
+  // invite in their client to enter. We do NOT force-join: the Synapse admin
+  // join endpoint acts as @__oidc_admin (not in the room) and refuses, so
+  // invite-and-accept is the mechanism. Tolerate "already invited/joined".
+  try {
+    await intent.invite(targetRoom, sender);
+    await intent.sendText(
+      roomId,
+      "I've sent you an invite to the 41chan space. Accept it in your client to join. Welcome."
+    );
+    invites.audit({ kind: "onramp_invited", sender, room: targetRoom });
+  } catch (e) {
+    const msg = (e && e.message) || "";
+    if (/already|in room|is already (in|joined)/i.test(msg)) {
+      await intent.sendText(
+        roomId,
+        "You already have an invite to (or membership in) the 41chan space. Check your invites to accept."
+      );
+      invites.audit({ kind: "onramp_invite_noop", sender });
+    } else {
+      await intent.sendText(roomId, "Sorry, I couldn't invite you right now. Please message @saber:41chan.net.");
+      invites.audit({ kind: "onramp_invite_failed", sender, error: msg.slice(0, 300) });
+    }
+  }
+  return true;
+}
+
 // Handle the !resetstrikes admin command. DM-only: requires sender in the
 // admin list AND a two-member room (bot + admin).
 async function handleResetCommand(bridge, event) {
@@ -299,6 +355,8 @@ new Cli({
             }
 
             if (event.type === "m.room.message" && event.content) {
+              // Local on-ramp command (DM only)
+              if (await handleJoinCommand(bridge, event)) return;
               // Admin reset command (DM only)
               if (await handleResetCommand(bridge, event)) return;
               // Avatar-setting flow (admin DM) — checked before tagging

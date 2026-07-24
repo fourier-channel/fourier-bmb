@@ -29,3 +29,5 @@ bridge:
     - "@admin:example.net"
   # Power level required in a room to invite the bot
   invite_power_level: 100
+  # Room/space a local user is invited to via the !join on-ramp command (a room ID)
+  onramp_room: "!yourspace:example.net"

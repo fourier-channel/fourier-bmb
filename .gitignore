@@ -4,4 +4,4 @@ audit.log
 *.tmp
 config.yaml
 bmb-registration.yaml
-node_modules/
+.env
