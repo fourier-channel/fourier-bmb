@@ -3,6 +3,8 @@ services:
   bmb:
     build: .
     container_name: bmb
+    env_file:
+      - .env
     restart: unless-stopped
     networks:
       - synapse_default
