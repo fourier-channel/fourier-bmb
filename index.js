@@ -122,19 +122,23 @@ async function handleImageEvent(bridge, event) {
     console.warn(`[autotag] fourier-spectrum unavailable, posting untagged: ${err.message}`);
   }
   const autoTags = (derived && derived.tags) || [];
-  let creatorTags = [];
+  let creatorTags = [], metaTags = [];
   try {
-    creatorTags = extractCreatorTags(buffer, contentType, { max: config.autotagger && config.autotagger.max_creator_tags });
+    const scraped = extractCreatorTags(buffer, contentType, { max: config.autotagger && config.autotagger.max_creator_tags });
+    creatorTags = scraped.tags;
+    metaTags = scraped.meta;
   } catch (err) {
     console.warn(`[creator-tags] prompt scrape failed: ${err.message}`);
   }
-  // Provenance partition (redesigned UI: creator=green, auto=orange, both=gradient).
+  // Provenance partition (UI: creator=green, auto=orange, both=gradient; meta =
+  // de-emphasised quality/meta section). Creator-only display is privacy-gated
+  // chanbooru-side (hidden by default); bmb still records it.
   const creatorSet = new Set(creatorTags);
   const autoSet = new Set(autoTags);
   const both = autoTags.filter((t) => creatorSet.has(t));
   const autoOnly = autoTags.filter((t) => !creatorSet.has(t));
   const creatorOnly = creatorTags.filter((t) => !autoSet.has(t));
-  const allTags = [...new Set([...creatorTags, ...autoTags])];
+  const allTags = [...new Set([...creatorTags, ...metaTags, ...autoTags])];
   const rating = (derived && derived.rating) || config.bridge.default_rating;
 
   const post = await danbooru.createPost(uploadMediaAssetId, {
@@ -151,11 +155,11 @@ async function handleImageEvent(bridge, event) {
     tags: tagString.split(/\s+/).filter(Boolean),
     rating,
     // Per-tag provenance for the redesigned tag buckets.
-    sources: { creator: creatorOnly, auto: autoOnly, both },
+    sources: { creator: creatorOnly, auto: autoOnly, both, meta: metaTags },
     updated_by: "bmb",
     updated_at: Date.now(),
   });
-  console.log(`[done] post #${post.id} tagged (${creatorOnly.length} creator / ${autoOnly.length} auto / ${both.length} both): ${tagString}`);
+  console.log(`[done] post #${post.id} tagged (${creatorOnly.length} creator / ${autoOnly.length} auto / ${both.length} both / ${metaTags.length} meta): ${tagString}`);
 }
 
 // Build the deps object handleInvite needs, backed by a bot Intent.

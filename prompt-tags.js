@@ -92,13 +92,31 @@ function rawPrompt(chunks) {
   return "";
 }
 
+// Curated quality/booster + meta terms. These are KEPT but classified separately
+// so the UI can tuck them into a de-emphasised, collapsible "quality & meta"
+// section rather than dropping them (separating outright risks breaking a
+// legitimate prompt). Curate this list as prompt fashions evolve.
+const QUALITY_META = new Set([
+  "masterpiece", "best_quality", "high_quality", "normal_quality", "low_quality", "worst_quality",
+  "amazing_quality", "great_quality", "best_aesthetic", "high_aesthetic", "aesthetic", "very_aesthetic",
+  "ultra-detailed", "ultra_detailed", "highly_detailed", "very_detailed", "extremely_detailed",
+  "super_detailed", "intricate_details", "intricate", "detailed",
+  "highres", "absurdres", "incredibly_absurdres", "lowres", "hires", "hi_res", "4k", "8k", "2k", "uhd", "16k",
+  "official_art", "concept_art", "key_visual", "promotional_art", "game_cg", "cg",
+  "award_winning", "award-winning", "trending_on_artstation", "artstation", "pixiv", "featured_on_pixiv",
+  "sharp_focus", "professional", "professional_lighting", "studio_quality", "source_quality",
+  "jpeg_artifacts", "scan_artifacts", "artifacts", "film_grain",
+  "newest", "recent", "oldest", "year_2023", "year_2024", "year_2025", "year_2026",
+]);
+
 // Normalise a freeform prompt into Danbooru-style tags: comma-split, strip
-// weights/brackets/LoRA tokens, lowercase, spaces -> underscores, dedupe.
+// weights/brackets/LoRA tokens, lowercase, spaces -> underscores, dedupe. Returns
+// { tags, meta } -- content tags vs quality/meta terms (kept, de-emphasised).
 function promptToTags(prompt, opts) {
   const max = (opts && opts.max) || 60;
-  if (!prompt) return [];
+  const out = { tags: [], meta: [] };
+  if (!prompt) return out;
   const seen = new Set();
-  const tags = [];
   const cleaned = String(prompt).replace(/<[^>]*>/g, " ").replace(/\bBREAK\b/g, ",");
   for (const raw of cleaned.split(",")) {
     const t = raw
@@ -113,10 +131,11 @@ function promptToTags(prompt, opts) {
     if (/^[\d_.]+$/.test(t)) continue;
     if (seen.has(t)) continue;
     seen.add(t);
-    tags.push(t);
-    if (tags.length >= max) break;
+    if (QUALITY_META.has(t)) out.meta.push(t);
+    else out.tags.push(t);
+    if (out.tags.length >= max) break;
   }
-  return tags;
+  return out;
 }
 
 // Public: image bytes -> creator (prompt-derived) tags. Never throws.
@@ -126,7 +145,7 @@ function extractCreatorTags(buffer, contentType, opts) {
       (Buffer.isBuffer(buffer) && buffer.length > 8 && buffer[0] === 0x89 && buffer[1] === 0x50);
     if (isPng) return promptToTags(rawPrompt(pngTextChunks(buffer)), opts);
   } catch (e) { /* fail soft */ }
-  return [];
+  return { tags: [], meta: [] };
 }
 
-module.exports = { extractCreatorTags, pngTextChunks, rawPrompt, promptToTags };
+module.exports = { extractCreatorTags, pngTextChunks, rawPrompt, promptToTags, QUALITY_META };
