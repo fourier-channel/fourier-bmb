@@ -7,7 +7,7 @@ COPY package.json package-lock.json* ./
 RUN npm install --omit=dev
 
 # Copy application code
-COPY danbooru.js invites.js index.js autotagger.js ./
+COPY danbooru.js invites.js index.js autotagger.js prompt-tags.js ./
 COPY config.yaml bmb-registration.yaml ./
 
 # The bridge listens on 8009 for Synapse's appservice traffic
