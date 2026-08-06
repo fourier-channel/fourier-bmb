@@ -95,6 +95,26 @@ class DanbooruClient {
     return resp.data;
   }
 
+  // Record the per-tag provenance partition on the booru (the single write path
+  // for the tag hub). The booru stores it, marks creator-only tags private, and
+  // returns the PUBLIC-SAFE projection to write into Matrix state.
+  // partition = { creator, auto, both, meta } (arrays of tag strings).
+  async recordTagSources(postId, partition) {
+    const resp = await this._client().post(`/posts/${postId}/tag_sources.json`, partition);
+    return resp.data; // { post_id, recorded, projection: { tags, sources } }
+  }
+
+  // Fetch a post's PUBLIC-SAFE tag projection (used for a duplicate image whose
+  // provenance is already recorded). Never includes private creator tags.
+  async getTagProjection(postId) {
+    const resp = await this._client().get(`/posts/${postId}/tag_sources.json`, {
+      params: { scope: "public" },
+      validateStatus: () => true,
+    });
+    if (resp.status === 200 && resp.data && Array.isArray(resp.data.tags)) return resp.data;
+    return null;
+  }
+
   async updateTags(postId, newTagString, oldTagString = "") {
     const resp = await this._client().put(`/posts/${postId}.json`, {
       post: {

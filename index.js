@@ -93,11 +93,28 @@ async function handleImageEvent(bridge, event) {
   const md5 = require("crypto").createHash("md5").update(buffer).digest("hex");
   const existing = await danbooru.findPostByMd5(md5);
   if (existing) {
-    const tagString = existing.tag_string || "";
+    // Provenance was already recorded when this post was first created. Pull the
+    // PUBLIC-SAFE projection so the new room's state matches and never carries
+    // private creator tags. Fall back to tag_string for legacy posts with no
+    // recorded provenance.
+    let projection = null;
+    try {
+      projection = await danbooru.getTagProjection(existing.id);
+    } catch (err) {
+      console.warn(`[tag-hub] getTagProjection failed for post #${existing.id}: ${err.message}`);
+    }
+    if (!projection || projection.tags.length === 0) {
+      const tagString = existing.tag_string || "";
+      projection = {
+        tags: tagString.split(/\s+/).filter(Boolean),
+        sources: { creator: [], auto: [], both: [], meta: [] },
+      };
+    }
     await bridge.getIntent().sendStateEvent(roomId, TAG_STATE_TYPE, mxcUrl, {
       post_id: existing.id,
-      tags: tagString.split(/\s+/).filter(Boolean),
+      tags: projection.tags,
       rating: existing.rating || config.bridge.default_rating,
+      sources: projection.sources,
       updated_by: "bmb",
       updated_at: Date.now(),
     });
@@ -138,28 +155,52 @@ async function handleImageEvent(bridge, event) {
   const both = autoTags.filter((t) => creatorSet.has(t));
   const autoOnly = autoTags.filter((t) => !creatorSet.has(t));
   const creatorOnly = creatorTags.filter((t) => !autoSet.has(t));
-  const allTags = [...new Set([...creatorTags, ...metaTags, ...autoTags])];
+  // The booru's tag_string carries only PUBLIC tags. Creator-ONLY tags (prompt-
+  // derived, may leak model names / private notes) never enter it; they travel
+  // solely in the provenance partition below, where the booru stores them
+  // private-by-default and withholds them from every public projection.
+  const publicTags = [...new Set([...autoTags, ...metaTags])];
   const rating = (derived && derived.rating) || config.bridge.default_rating;
 
   const post = await danbooru.createPost(uploadMediaAssetId, {
     rating,
-    tagString: allTags.join(" "),
+    tagString: publicTags.join(" "),
     source: mxcUrl,
   });
-  const fullPost = await danbooru.getPost(post.id);
-  const tagString = fullPost.tag_string || "";
+
+  // Single write path (the tag hub): hand the FULL partition to the booru. It
+  // records it, keeps creator-only tags private, fans out to consumers, and hands
+  // back the PUBLIC-SAFE projection we write into the room-public Matrix state.
+  const partition = { creator: creatorOnly, auto: autoOnly, both, meta: metaTags };
+  let projection = null;
+  try {
+    const recorded = await danbooru.recordTagSources(post.id, partition);
+    projection = recorded && recorded.projection;
+  } catch (err) {
+    console.warn(`[tag-hub] recordTagSources failed for post #${post.id}: ${err.message}`);
+  }
+  // If the hub is unreachable, fall back to the booru's tag_string -- still
+  // public-safe, since creator-only tags were never written to it.
+  if (!projection) {
+    const fullPost = await danbooru.getPost(post.id);
+    projection = {
+      tags: (fullPost.tag_string || "").split(/\s+/).filter(Boolean),
+      sources: { creator: [], auto: autoOnly, both, meta: metaTags },
+    };
+  }
 
   const intent = bridge.getIntent();
   await intent.sendStateEvent(roomId, TAG_STATE_TYPE, mxcUrl, {
     post_id: post.id,
-    tags: tagString.split(/\s+/).filter(Boolean),
+    tags: projection.tags,
     rating,
-    // Per-tag provenance for the redesigned tag buckets.
-    sources: { creator: creatorOnly, auto: autoOnly, both, meta: metaTags },
+    // PUBLIC-SAFE provenance for the redesigned tag buckets. Creator-only tags are
+    // withheld by the booru and surface only via its identity-gated read.
+    sources: projection.sources,
     updated_by: "bmb",
     updated_at: Date.now(),
   });
-  console.log(`[done] post #${post.id} tagged (${creatorOnly.length} creator / ${autoOnly.length} auto / ${both.length} both / ${metaTags.length} meta): ${tagString}`);
+  console.log(`[done] post #${post.id} tagged (${creatorOnly.length} creator[private] / ${autoOnly.length} auto / ${both.length} both / ${metaTags.length} meta)`);
 }
 
 // Build the deps object handleInvite needs, backed by a bot Intent.
